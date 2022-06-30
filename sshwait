@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+# Author:  Blake Jordan Alexander
+
+import sys
+import os
+import shutil
+import getopt
+import time
+import subprocess
+import shlex
+
+from typing import NoReturn, List
+
+# The options flags used by openssh, ripped directly from the source code
+# see: https://github.com/openssh/openssh-portable/blob/master/ssh.c
+SSHOPTS = "1246ab:c:e:fgi:kl:m:no:p:qstvx" \
+	    "AB:CD:E:F:GI:J:KL:MNO:PQ:R:S:TVw:W:XYy"
+
+
+
+def error(status : int, message : str) -> NoReturn:
+
+    program_invocation_short_name = os.path.basename(sys.argv[0])
+
+    sys.stdout.flush()
+    sys.stderr.write(f"{program_invocation_short_name}: ")
+    if status != os.EX_OK:
+        sys.stderr.write("error: ")
+    sys.stderr.write(f"{message}\n")
+
+    sys.exit(status)
+
+
+def can_connect(host : str, port_opt : str = None) -> bool:
+
+    cmd = "ssh "
+
+    # Disable all authentication mechanisms so that if the host is up, we
+    # get a permission denied message no matter what. Otherwise, it times out.
+    cmd += "-o BatchMode=yes "
+    cmd += "-o PubkeyAuthentication=no "
+    cmd += "-o ChallengeResponseAuthentication=no "
+    cmd += "-o KbdInteractiveAuthentication=no "
+    cmd += "-o PasswordAuthentication=no "
+
+    # The maximum time allowed for the connection to complete, if it takes
+    # longer than this, ssh is down on the host.
+    cmd += "-o ConnectTimeout=5 "
+
+    # Disable host key checking so that we don't block for the prompt
+    cmd += "-o StrictHostKeyChecking=no "
+    cmd += f"-o UserKnownHostsFile={os.devnull} "
+
+    # We simply transparently pass the destination argument, which is either
+    # of [user@]host format or ssh://[user@]host:[port] format. ssh handles
+    # both but if the user supplied the port manually, so should we.
+    cmd += f"{host} "
+
+    if port_opt is not None:
+        cmd += f"-p {port_opt} "
+
+    # If by some miracle we connect, we want to execute the 'exit' command so
+    # that the command actually completes.
+    cmd += "exit"
+
+    # Now we actually call ssh, and check for permission denied as our marker
+    cmd = shlex.split(cmd)
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    return True if b"Permission denied" in proc.stdout else False
+
+
+def main(args : List[str]) -> NoReturn:
+
+    # Check whether ssh is installed and/or available to the user
+    sshpath = shutil.which("ssh")
+    if sshpath is None:
+        error(os.EX_OSFILE, 'program "ssh" not found, is it installed?')
+
+    # extract the destination mandatory argument and the port optional argument
+    try:
+        opts, rem_args = getopt.gnu_getopt(args, SSHOPTS)
+    except getopt.GetoptError as e:
+        error(os.EX_USAGE, e.msg)
+
+    destination = rem_args[1] if len(rem_args) > 1 else None
+    if destination == None:
+        error(os.EX_USAGE, "no destination to give ssh")
+
+    port_opt = [(opt, val) for opt, val in opts if opt == '-p']
+    port_opt = None if port_opt == [] else port_opt[0][1]
+
+    # Constantly try to connect
+    while not can_connect(destination, port_opt):
+        time.sleep(1)
+
+    # do the equivalent of fork + exec ssh as if the user called ssh directly
+    args[0] = sshpath # construct the argv of ssh
+    ssh = subprocess.run(args)
+
+    # do the equivalent of waitpid() and then return the programs exit code
+    sys.exit(ssh.returncode)
+
+
+# Program entry point
+if __name__ == "__main__":
+    main(sys.argv)
