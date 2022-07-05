@@ -69,6 +69,18 @@ def can_connect(host : str, port_opt : str = None) -> bool:
     return True if b"Permission denied" in proc.stdout else False
 
 
+def send_alert(dest=None):
+    libnotify_support = shutil.which("notify-send") is not None
+    if os.getenv("DISPLAY") is not None and libnotify_support:
+        if dest is None:
+            dest = 'ssh'
+        dest = shlex.quote(dest) # security: avoid shell injection
+        os.system(f"notify-send --expire-time=2000 " \
+                   "sshwait: {dest} is now available")
+    sys.stdout.write('\a') # terminal BEL
+    sys.stdout.flush()
+
+
 def main(args : List[str]) -> NoReturn:
 
     # Check whether ssh is installed and/or available to the user
@@ -92,6 +104,8 @@ def main(args : List[str]) -> NoReturn:
     # Constantly try to connect
     while not can_connect(destination, port_opt):
         time.sleep(1)
+    else:
+        send_alert(destination)
 
     # do the equivalent of fork + exec ssh as if the user called ssh directly
     args[0] = sshpath # construct the argv of ssh
